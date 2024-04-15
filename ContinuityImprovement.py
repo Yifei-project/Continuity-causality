@@ -4,7 +4,7 @@ from scipy.stats import ttest_rel, wilcoxon
 from scipy.spatial.distance import cdist
 from sklearn.decomposition import PCA, SparsePCA, KernelPCA
 from sklearn.neighbors import KDTree
-from utils_contin import scale_ts, hankel_matrix, train_valid_split, Continuity_index, contimpro, Advanced_Select1, Advanced_Select2, contimpro
+from utils_contin import scale_ts, hankel_matrix, train_valid_split, Continuity_index, contimpro, Advanced_Select1, Advanced_Select2
 import math
 from tqdm import trange
 # from matplotlib import pyplot as plt
