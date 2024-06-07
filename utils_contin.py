@@ -141,8 +141,8 @@ def train_valid_split(x, y, z, time_window, pred_horizon, valid_split=0.0):
     # print(valid_maxlen)
     label_train = hankel_matrix(label_mat[:train_index], pred_horizon)[:train_maxlen]
     label_valid = hankel_matrix(label_mat[-valid_index:], pred_horizon)[:valid_maxlen]
-    label_train = label_train.squeeze(-1).squeeze(-1)
-    label_valid = label_valid.squeeze(-1).squeeze(-1)
+    label_train = label_train.squeeze(-1)
+    label_valid = label_valid.squeeze(-1)
 
     X0 = hankel_matrix(reduce_mat, time_window)
     Y0 = hankel_matrix(full_mat, time_window)
@@ -152,9 +152,7 @@ def train_valid_split(x, y, z, time_window, pred_horizon, valid_split=0.0):
 
     reduce_valid = X0[-valid_maxlen:, :time_window ][:valid_maxlen]
     full_valid = Y0[-valid_maxlen:, :time_window ][:valid_maxlen]
-    if pred_horizon == 1:
-        label_train = label_train[:,None]
-        label_valid = label_valid[:,None]
+
     return (reduce_train, full_train, label_train), (reduce_valid, full_valid, label_valid)
 
 
