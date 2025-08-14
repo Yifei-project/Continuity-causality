@@ -1,9 +1,10 @@
 # Continuity-causality
-This is an implemenation of causality framework named continuity causality, associated with time series analysis.
+This is an implemenation of causal discovery that applies the continuity of assumed models to infer causal coupling, associated with time series analysis.
 The concept of continuity causality can help identify some cases where other statistical causal methods like Granger causality [1] fail to detect causality.
 The accepted interpretation is non-seperability of subsystem [2,3], while it is also expressed with causal faithfulness in other fields [4,5].
 
-The parctical approach to detect causality based on this concept is also presented.  
+The parctical approach to detect causality based on this concept is also presented.
+The proposed approach can be regarded as an extension of nonlinear Granger causality but parametric equations are needless.
 If you find this code are helpful to your research, please cite the paper below,
 
 Chen, Y., Wang, J. & Lin, Y. Inferring causality from mapping continuity changes. Nonlinear Dyn (2024). https://doi.org/10.1007/s11071-024-09398-x
