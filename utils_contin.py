@@ -129,6 +129,9 @@ def train_valid_split(x, y, z, time_window, pred_horizon, valid_split=0.0):
         reduce_mat = y
         full_mat = np.stack([y, x], axis=1)
 
+    # reduce_mat = standardize_ts(reduce_mat)[:-(time_window)]
+    # full_mat = standardize_ts(full_mat)[:-(time_window)]
+    # label_mat = standardize_ts(y)[(time_window):] 
     reduce_mat = reduce_mat[:-(time_window)]
     full_mat = full_mat[:-(time_window)]
     label_mat = y[(time_window):] 
@@ -141,8 +144,8 @@ def train_valid_split(x, y, z, time_window, pred_horizon, valid_split=0.0):
     # print(valid_maxlen)
     label_train = hankel_matrix(label_mat[:train_index], pred_horizon)[:train_maxlen]
     label_valid = hankel_matrix(label_mat[-valid_index:], pred_horizon)[:valid_maxlen]
-    label_train = label_train.squeeze(-1)
-    label_valid = label_valid.squeeze(-1)
+    label_train = label_train.squeeze()
+    label_valid = label_valid.squeeze()
 
     X0 = hankel_matrix(reduce_mat, time_window)
     Y0 = hankel_matrix(full_mat, time_window)
@@ -152,7 +155,9 @@ def train_valid_split(x, y, z, time_window, pred_horizon, valid_split=0.0):
 
     reduce_valid = X0[-valid_maxlen:, :time_window ][:valid_maxlen]
     full_valid = Y0[-valid_maxlen:, :time_window ][:valid_maxlen]
-
+    if pred_horizon == 1:
+        label_train = label_train[:,None]
+        label_valid = label_valid[:,None]
     return (reduce_train, full_train, label_train), (reduce_valid, full_valid, label_valid)
 
 
@@ -176,7 +181,7 @@ def time_shifted_surrogates(x, N=100, lag=None, random_seed=None):
 
 
 
-def contimpro(embed_reduce, embed_full, target, R=5, metric='minkowski', p=2, Theiler_window=1):
+def contimpro(embed_reduce, embed_full, target, R=5, metric='minkowski', p=2, Theiler_window=0):
     """
     realization of Continuity Improvement
     embed_reduce:  the embedding of preimage set of f_reduced
@@ -190,18 +195,19 @@ def contimpro(embed_reduce, embed_full, target, R=5, metric='minkowski', p=2, Th
     fullTree = KDTree(embed_full, metric=metric, p=p)
     reduceTree = KDTree(embed_reduce, metric=metric, p=p)
 
-    dists_reduce, _ = reduceTree.query(embed_reduce, k=R+1)
-    # dists_reduce = (dists_reduce.mean())
-    idxs_reduce = reduceTree.query_radius(embed_reduce, dists_reduce[:, R] + 1e-15)
+    _, ind_reduce0 = reduceTree.query(embed_reduce, k=R+1+2*Theiler_window)
+    valid_mask = np.abs(ind_reduce0 - np.arange(embed_reduce.shape[0])[:,np.newaxis]) > Theiler_window
+    idxs_reduce = np.asarray([ind_reduce0[ii][valid_mask[ii]][:R] for ii in range(ind_reduce0.shape[0])])
 
-    dists_full, _ = fullTree.query(embed_full, k=R+1)
-    idxs_full = fullTree.query_radius(embed_full, dists_full[:, R] + 1e-15)
+    _, ind_full0 = fullTree.query(embed_full, k=R+1+2*Theiler_window)
+    valid_mask = np.abs(ind_full0 - np.arange(embed_full.shape[0])[:,np.newaxis]) > Theiler_window
+    idxs_full = np.asarray([ind_full0[ii][valid_mask[ii]][:R] for ii in range(ind_full0.shape[0])])
 
     dis_full = dis_func(idxs_full, target)
     dis_reduce = dis_func(idxs_reduce, target)
 
-    m_re = dis_reduce[::Theiler_window].mean() 
-    m_fu = dis_full[::Theiler_window].mean()                
+    m_re = dis_reduce.mean() 
+    m_fu = dis_full.mean()                
     ci = max((m_re - m_fu) / m_re, 0)  # output: a scalar value
     # print(ci)
     return ci, dis_reduce, dis_full
@@ -231,23 +237,24 @@ def is_low(eps1, eps2, bound):
         return False
 
 
-def calc_epsilon(input_cloud, output_cloud, k=5, metric='minkowski', p=2, Theiler_window=1):    
+def calc_epsilon(input_cloud, output_cloud, k=5, metric='minkowski', p=2, Theiler_window=0):    
     """
     an auxiliary function For Advanced Selection
     calculate the Continuity statistic given preimage set And image set
     """
 
     featTree = KDTree(input_cloud, metric=metric, p=p)
-    featdists, _ = featTree.query(input_cloud, k=k+1)
-    idxs = featTree.query_radius(input_cloud, featdists[:, k] + 1e-15)
+    _, featinds = featTree.query(input_cloud, k=k+1+2*Theiler_window)
+    valid_mask = np.abs(featinds - np.arange(featinds.shape[0])[:,np.newaxis]) > Theiler_window
+    idxs = np.asarray([featinds[ii][valid_mask[ii]][:k] for ii in range(featinds.shape[0])])
     epsilon = [np.max(cdist(output_cloud[k].reshape(-1, output_cloud[k].shape[0]), output_cloud[idxs[k]], metric=metric, p=p)) for k in range(len(idxs))]
     #print(np.array(epsilon).shape)
-    epsilon = np.array(epsilon)[::Theiler_window].mean()
+    epsilon = np.array(epsilon).mean()
     # print(epsilon)
     return epsilon
 
 
-def Advanced_Select1(embed_vec, label_vec, k=5, significant_bound=0.005, start_indice=0, metric='minkowski', Greedy=True, p=2, Theiler_window=1):
+def Advanced_Select1(embed_vec, label_vec, k=5, significant_bound=0.005, start_indice=0, metric='minkowski', Greedy=True, p=2, Theiler_window=0):
     """
     The first Advanced selection
     significant_bound:  float,  determines μ
@@ -263,7 +270,7 @@ def Advanced_Select1(embed_vec, label_vec, k=5, significant_bound=0.005, start_i
         if dep>tol_indice and (flag[0:tol_indice+1]==0).all():
             return
         if dep>=(embed_vec.shape[1]):
-            new_eps = calc_epsilon( project(sort_embed, flag), label_vec, k=k, metric=metric, p=p)
+            new_eps = calc_epsilon( project(sort_embed, flag), label_vec, k=k, metric=metric, p=p, Theiler_window=Theiler_window)
 
             if (is_low(new_eps, optim, -1*significant_bound*radius)): 
                 if (new_eps<optim):
@@ -297,13 +304,13 @@ def Advanced_Select1(embed_vec, label_vec, k=5, significant_bound=0.005, start_i
     tol_indice = max(start_indice-1, 0)
 
     global optim
-    optim = calc_epsilon(sort_embed[:, 0:tol_indice+1], label_vec, k=k, metric=metric, p=p)
+    optim = calc_epsilon(sort_embed[:, 0:tol_indice+1], label_vec, k=k, metric=metric, p=p, Theiler_window=Theiler_window)
     if Greedy:
         flag = Flag.copy()
         flag[0: tol_indice+1] = 1
         for i in range(tol_indice+1, embed_vec.shape[1]):
             flag[i] = 1
-            eps = calc_epsilon( project(sort_embed, flag), label_vec, k=k, metric=metric, p=p )
+            eps = calc_epsilon( project(sort_embed, flag), label_vec, k=k, metric=metric, p=p, Theiler_window=Theiler_window)
             if (is_low(eps, optim, -1*significant_bound*radius)):
                 optim = eps
             else:
@@ -316,7 +323,7 @@ def Advanced_Select1(embed_vec, label_vec, k=5, significant_bound=0.005, start_i
 
 
 
-def Advanced_Select2(embed_vec, cause_vec, label_vec, k=5, start_indice=0, significant_bound=0.005, metric='minkowski', p=2, Theiler_window=1):
+def Advanced_Select2(embed_vec, cause_vec, label_vec, k=5, start_indice=0, significant_bound=0.005, metric='minkowski', p=2, Theiler_window=0):
     """
     The second Advanced selection
     significant_bound:  float,  determines μ
@@ -326,7 +333,7 @@ def Advanced_Select2(embed_vec, cause_vec, label_vec, k=5, start_indice=0, signi
     global Flag
     Flag = np.zeros(cause_vec.shape[1])
     global optim
-    optim = calc_epsilon(embed_vec, label_vec, k=k, metric=metric, p=p)
+    optim = calc_epsilon(embed_vec, label_vec, k=k, metric=metric, p=p, Theiler_window=Theiler_window)
     # flag = Flag.copy()
 
     for i in range(Flag.shape[0]):
@@ -334,7 +341,7 @@ def Advanced_Select2(embed_vec, cause_vec, label_vec, k=5, start_indice=0, signi
         for j in range(Flag.shape[0]):
             if Flag[j] == 0:
                 cat_embed = np.concatenate((embed_vec, cause_vec[:embed_vec.shape[0], j:j+1]), axis=1)
-                eps = calc_epsilon(cat_embed, label_vec, k=k, metric=metric, p=p)
+                eps = calc_epsilon(cat_embed, label_vec, k=k, metric=metric, p=p, Theiler_window=Theiler_window)
                 eps_dict[Flag.shape[0]-j] = eps
         min_key = min(eps_dict, key=eps_dict.get)
         if (is_low(eps_dict[min_key], optim, -1*significant_bound*radius)):
