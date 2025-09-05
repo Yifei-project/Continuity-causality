@@ -4,7 +4,7 @@ from scipy.stats import ttest_rel, wilcoxon
 from scipy.spatial.distance import cdist
 from sklearn.decomposition import PCA, SparsePCA, KernelPCA
 from sklearn.neighbors import KDTree
-from utils_contin import scale_ts, hankel_matrix, train_valid_split, Continuity_index, contimpro, Advanced_Select1, Advanced_Select2
+from .utils_contin import scale_ts, standardize_ts, train_valid_split, Continuity_index, contimpro, Advanced_Select1, Advanced_Select2
 import math
 from tqdm import trange
 # from matplotlib import pyplot as plt
@@ -68,7 +68,7 @@ class StandardContinuityImprove(object):
         return statis, pval 
 
 
-    def premise_test(self, cause, effect, condition, advanced_select=True, R=5, scale=False, DistanceMetric='minkowski', p=2):
+    def premise_test(self, cause, effect, condition, advanced_select=True, R=10, scale=True, DistanceMetric='minkowski', p=2):
         if scale == True:
             cause = scale_ts(cause)
             effect = scale_ts(effect)
@@ -86,8 +86,8 @@ class StandardContinuityImprove(object):
         return record
 
 
-    def onepair_test(self, cause, effect, condition, R=5, pair_test="ttest", scale=False, \
-            advanced_select=True, embed_reduce=None, DistanceMetric='minkowski', p=2, Theiler_window=1):
+    def single_inference(self, cause, effect, condition, R=10, pair_test="ttest", scale=True, \
+            advanced_select=True, embed_reduce=None, DistanceMetric='minkowski', p=2, Theiler_window=0):
         '''
         cause/effect: array-like, ndarray shape (T,)  scalar time series recordings
         condition: list or array-like, list [x1, x2, ..., xn] xi is ndarray type shape (T,) or ndarray shape (T,N)
@@ -138,7 +138,17 @@ class StandardContinuityImprove(object):
         return ci, alpha, dis_reduce, dis_full, delay
 
 
-    def run_mci(self, data, advanced_select=True, R=5, pair_test='ttest', scale=False, DistanceMetric='minkowski', p=2, Theiler_window=1):
+    def pairwise_inference(self, X, condition=[], R=10, pair_test="ttest", scale=True,\
+            advanced_select=True, embed_reduce=None, DistanceMetric='minkowski', p=2, Theiler_window=0):
+        assert X.shape[1] == 2
+        R1, pval1,_,_,_ = self.single_inference(X[:,0], X[:,1], condition, R, pair_test,\
+                                                 scale, advanced_select, embed_reduce, DistanceMetric, p, Theiler_window)
+        R2, pval2,_,_,_ = self.single_inference(X[:,1], X[:,0], condition, R, pair_test,\
+                                                 scale, advanced_select, embed_reduce, DistanceMetric, p, Theiler_window)
+        return (R1, R2), (pval1, pval2)
+
+
+    def run_mci(self, data, advanced_select=True, R=10, pair_test='ttest', scale=True, DistanceMetric='minkowski', p=2, Theiler_window=0):
         '''
         data: list or array-like, 
               e.g. list [x1, x2, ..., xn]  xi is ndarray type shape (T,)  ndarray shape (T, N)
@@ -217,41 +227,45 @@ class ParallelContinuityImprove(StandardContinuityImprove):
         super().__init__(*args, **kwargs)
         self.n_jobs = n_jobs
 
-    # Override
-    def onepair_test(self, cause, effect, condition, R=5, pair_test="ttest", scale=False, \
-            advanced_select=True, latent_reduce=None, DistanceMetric='minkowski', p=2, Theiler_window=1):
+
+    def single_inference(self, cause, effect, condition, R=10, pair_test="ttest", scale=True, \
+            advanced_select1=True, advanced_select2=True, latent_reduce=None, DistanceMetric='minkowski', p=2, Theiler_window=0):
 
         if scale == True:
             cause = scale_ts(cause)
             effect = scale_ts(effect)
             condition = [scale_ts(condition[i]) for i in range(len(condition))]
 
+        (_, full, label), (_,_,_) = train_valid_split(cause, effect, condition, self.time_window, self.pred_horizon)
+        cause_vec = full[:,:,-1]
+
         if latent_reduce is None:
             latent_reduce, label = self.fit_transform(cause, effect, condition)
         else:
-            pass
+            N = min(latent_reduce.shape[0], full.shape[0])
+            latent_reduce = latent_reduce[:N]
+            cause_vec = cause_vec[:N]
+            label = label[:N]
        
-        (_, full, label), (_,_,_) = train_valid_split(cause, effect, condition, self.time_window, self.pred_horizon)
-        cause_vec = full[:,:,-1]
-        if advanced_select:
+        if advanced_select1:
 
-            embed_reduce,_ = Advanced_Select1(latent_reduce, label, k=R, metric=DistanceMetric, p=p)
+            embed_reduce,_ = Advanced_Select1(latent_reduce, label, k=R, metric=DistanceMetric)
         else:
             embed_reduce = latent_reduce
         latent_full = np.concatenate((embed_reduce, cause_vec), axis=1)
-        if advanced_select:
+        if advanced_select2:
 
-            embed_full, flag = Advanced_Select2(embed_reduce, cause_vec, label, k=R, metric=DistanceMetric, p=p)
+            embed_full, flag = Advanced_Select2(embed_reduce, cause_vec, label, k=R, metric=DistanceMetric)
         else:
             embed_full = latent_full       
-        ci, dis_reduce, dis_full = contimpro(embed_reduce, embed_full, label, R=R, metric=DistanceMetric, p=p)
+        ci, dis_reduce, dis_full = contimpro(embed_reduce, embed_full, label, R=R, metric=DistanceMetric)
 
         if embed_full.shape[1] == embed_reduce.shape[1]:
             alpha = 1
         else:
             _, alpha = self.get_mean_significance(dis_reduce, dis_full, test_name=pair_test)
         delay = []
-        if advanced_select:
+        if advanced_select2:
             # flag = flag[embed_reduce.shape[1]:]
             W = len(flag)
             for i in range(W):
@@ -260,8 +274,7 @@ class ParallelContinuityImprove(StandardContinuityImprove):
 
         return ci, alpha, dis_reduce, dis_full, delay
 
-
-    def run_mci(self, data, advanced_select=True, R=5, pair_test='ttest', scale=False, DistanceMetric='minkowski', p=2, Theiler_window=1):
+    def run_mci(self, data, advanced_select=True, R=10, pair_test='ttest', scale=True, DistanceMetric='minkowski', p=2, Theiler_window=0):
         '''
         data: list or array-like, 
               e.g. list [x1, x2, ..., xn]  xi is ndarray type shape (T,) or ndarray shape (T, N)
@@ -279,7 +292,6 @@ class ParallelContinuityImprove(StandardContinuityImprove):
                 data = [scale_ts(data[i]) for i in range(len(data))]
             else:
                 data = scale_ts(data)
-
 
         if type(data) is not list:
             data = data.transpose()
@@ -299,9 +311,9 @@ class ParallelContinuityImprove(StandardContinuityImprove):
             ll = [k for k in range(N)]#
             ll.remove(j)
             with Parallel(n_jobs=self.n_jobs) as parallel:
-                results = parallel(delayed(self.onepair_test)(data[i], data[j], condition=makecondition(data, ll.copy(), i), \
-                                            R=R, DistanceMetric=DistanceMetric, p=p, pair_test=pair_test, advanced_select=advanced_select, \
-                                                latent_reduce=None, Theiler_window=Theiler_window)
+                results = parallel(delayed(self.single_inference)(data[i], data[j], condition=makecondition(data, ll.copy(), i), \
+                                            R=R, DistanceMetric=DistanceMetric, p=p, pair_test=pair_test, advanced_select1=advanced_select, \
+                                                advanced_select2=advanced_select, latent_reduce=None, Theiler_window=Theiler_window)
                                                     for i in ll)
 
                 for i in ll:
@@ -315,4 +327,4 @@ class ParallelContinuityImprove(StandardContinuityImprove):
                     self.MCI_signmatrix[i][j] = results[ii][1]
                     self.MCI_delaymatrix[j+1][i] = results[ii][-1]
     
-        return self.MCI_valmatrix, self.MCI_signmatrix  
+        return self.MCI_valmatrix, self.MCI_signmatrix    
